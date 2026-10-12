@@ -10,6 +10,7 @@
 <script src="https://unpkg.com/@jspsych/plugin-instructions@2.1.0/dist/index.browser.min.js"></script>
 <script src="https://unpkg.com/@jspsych/plugin-survey-text@2.1.1/dist/index.browser.min.js"></script>
 <script src="https://unpkg.com/@jspsych/plugin-html-button-response@2.1.0/dist/index.browser.min.js"></script>
+<script src="https://unpkg.com/@jspsych/plugin-html-slider-response@2.1.0/dist/index.browser.min.js"></script>
 <!-- DataPipe: saves each participant's data file to your storage account; no server needed -->
 <script src="https://unpkg.com/@jspsych/extension-pipe@0.2.0/dist/index.browser.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/jspsych@8.3.0/css/jspsych.css">
@@ -400,27 +401,52 @@ OPENING.concat(REACTIONS).forEach(m => { if (/\bthat\b/i.test(m)) console.warn('
 /* =====================================================================================
    CODING HELPERS (automatic first pass; hand-check before analysis)
    ===================================================================================== */
+// Edit distance, for typo-tolerant verb matching ("belive", "beliebe", "beleive" all count as believe).
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] !== b[j - 1])));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+const MAIN_SUBJ = { i: "i", you: "you", u: "you" };
+const EMB_SUBJ = { "i": "i", "i'm": "i", "im": "i", "i've": "i", "ive": "i",
+                   "you": "you", "you're": "you", "youre": "you", "you've": "you", "youve": "you", "u": "you", "ur": "you" };
+
 function codeAnswer(text, keylog, trial) {
   const t = text.trim();
-  // Main verb: "believe" is the target; "think" is coded too (F&H Exp. 2 used it), other verbs are not.
-  const V = "(believes?|thinks?)";
-  const m = t.match(new RegExp("^\\W*(i|you)\\s+(?:\\w+\\s+)?" + V + "\\b", "i"));   // allows "I really believe"
-  const mainProd = m ? m[1].toLowerCase() : null;
-  const verbProd = m ? m[2].toLowerCase().replace(/s$/, "") : null;
-  // Embedded subject, including apostrophe-less typing ("im", "youre")
-  const e = t.match(new RegExp(V + "\\s+(that\\s+)?(i|i'm|im|i've|ive|you|you're|youre|you've|youve|ur|u)\\b", "i"));
-  // Full clause required after the embedded subject: a contraction ("I'm", "youre") or at least one more
-  // word. Rules out "I believe you." (direct object) and cut-off answers like "You believe that I".
-  const clauseRe = new RegExp(V + "\\s+(that\\s+)?(?:(?:i'm|im|i've|ive|you're|youre|you've|youve)\\b|(?:i|you|u|ur)\\s+[a-z])", "i");
-  const embProd = e && clauseRe.test(t) ? (/^i/i.test(e[3]) ? "i" : "you") : null;
+  // Token-based and typo-tolerant: main subject (I / you / u), optional adverb ("I really believe"),
+  // the verb (believe within 2 typos, or think), optional "that", then the embedded subject.
+  const w = (t.toLowerCase().match(/[a-z']+/g) || []);
+  const isBelieve = (x) => x && Math.min(editDistance(x, "believe"), editDistance(x, "believes")) <= 2 && x.length >= 5;
+  const isThink = (x) => x === "think" || x === "thinks";
+  let mainProd = null, verbProd = null, verbTok = null, embProd = null, thatHere = false;
+  if (w.length >= 3 && MAIN_SUBJ[w[0]]) {
+    mainProd = MAIN_SUBJ[w[0]];
+    const k = (isBelieve(w[1]) || isThink(w[1])) ? 1 : ((isBelieve(w[2]) || isThink(w[2])) ? 2 : -1);
+    if (k > 0) {
+      verbTok = w[k]; verbProd = isThink(verbTok) ? "think" : "believe";
+      let j = k + 1;
+      if (w[j] === "that") { thatHere = true; j++; }
+      const subj = w[j];
+      // Full clause required: a contraction, or at least one more word after the subject.
+      if (subj && EMB_SUBJ[subj] && (/(m|re|ve)$/.test(subj) && subj.length > 1 && subj !== "i" || w.length > j + 1))
+        embProd = EMB_SUBJ[subj];
+    }
+  }
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const V = verbTok ? "(" + esc(verbTok) + ")" : "(believes?|thinks?)";   // timing regexes use the verb as typed
   const thatRe = new RegExp(V + "\\s+that\\b", "i");
   const iThat = keylog.findIndex(k => thatRe.test(k[3]));
   const iVerb = keylog.findIndex(k => new RegExp(V + "\\s$", "i").test(k[3]));
   const iEmb  = keylog.findIndex(k => new RegExp(V + "\\s+(that\\s+)?[a-z]", "i").test(k[3]));
   return {
-    that_mentioned: thatRe.test(t),                                   // "that" right after believe/think
+    that_mentioned: verbTok ? thatHere : thatRe.test(t),              // "that" right after believe/think
     main_prod: mainProd, verb_prod: verbProd, emb_prod: embProd,
-    valid_structure: mainProd === trial.main_target && embProd === trial.emb_target,   // any coded verb
+    valid_structure: !!verbProd && mainProd === trial.main_target && embProd === trial.emb_target,   // any coded verb
+    verb_typed: verbTok,                                              // the verb exactly as typed (typos visible)
     valid_believe: mainProd === trial.main_target && embProd === trial.emb_target && verbProd === "believe",
     that_first_pass: iThat < 0 ? null : keylog[iThat][2] === keylog[iThat][3].length,
     that_deleted: keylog.some((k, i) => i > 0 && thatRe.test(keylog[i - 1][3]) && !thatRe.test(k[3])),
@@ -692,13 +718,26 @@ const probeOpen = {
 };
 const probeBelief = {
   type: jsPsychHtmlButtonResponse,
-  stimulus: "<p class='instr'>Honestly, who do you think you were chatting with?</p>",
-  choices: ["Another person", "An AI system", "I'm not sure"],
+  // Past tense on purpose: we want what they believed DURING the chat. Asked first, right after the chat,
+// before the open-ended questions can plant doubt (those come after and still catch awareness of "that").
+  stimulus: "<p class='instr'>Honestly, while you were chatting, did you believe you were talking to a human or an AI?</p>",
+  choices: ["A human", "An AI", "I wasn't sure"],
   data: { task: "probe_belief" },
   on_finish: (d) => { d.belief = ["person", "ai", "unsure"][d.response]; }
 };
 // After learning about the deception, participants choose whether their data are kept.
 // Rows from anyone with keep_data = false must be deleted before analysis.
+// Continuous belief, asked right after the categorical question: 0 = definitely an AI, 100 = definitely a human.
+// The slider starts in the middle and has to be moved before continuing.
+const probeBeliefScale = {
+  type: jsPsychHtmlSliderResponse,
+  stimulus: "<p class='instr'>While you were chatting, how likely did it seem that your partner was a human?</p>",
+  labels: ["Definitely an AI", "Not sure", "Definitely a human"],
+  min: 0, max: 100, slider_start: 50, require_movement: true, button_label: "Continue",
+  data: { task: "probe_belief_scale" },
+  on_finish: (d) => { d.belief_human_0_100 = d.response; }
+};
+
 const debrief = {
   type: jsPsychHtmlButtonResponse, stimulus: DEBRIEF_HTML,
   choices: ["Keep my responses and finish", "Remove my responses and finish"], data: { task: "debrief" },
@@ -722,6 +761,6 @@ const notice = {
   choices: ["Continue"], data: { task: "notice" }
 };
 
-jsPsych.run([consent, instructions, practiceIntro, ...practiceTrials, practiceDone, notice, { type: WaitingRoomPlugin }, ...chatTrials, probeOpen, probeBelief, debrief]);
+jsPsych.run([consent, instructions, practiceIntro, ...practiceTrials, practiceDone, notice, { type: WaitingRoomPlugin }, ...chatTrials, probeBelief, probeBeliefScale, probeOpen, debrief]);
 </script>
 </html>
