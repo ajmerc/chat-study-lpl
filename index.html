@@ -113,6 +113,7 @@ const PARTNER_LABELS = {
     name: "Participant {ID}", subtitle: "Live participant", avatar: "P",
     notice: `<h2>Before you start</h2>
       <p>You'll be connected to a <strong>live participant</strong> taking part in this study right now.</p>
+      <p>Your partner has been given a list of short scenarios and will send them to you word for word.</p>
       <p>The chat is one-on-one. Your partner sees your messages, but not your name or any other details about you,
       and you won't see theirs.</p>`,
     searching: "Waiting for another participant… (1 of 2 connected)",
@@ -124,6 +125,7 @@ const PARTNER_LABELS = {
     name: "AI assistant", subtitle: "AI model", avatar: "AI",
     notice: `<h2>Before you start</h2>
       <p>You'll be connected to an <strong>AI assistant</strong> for this part of the study.</p>
+      <p>The assistant has been given a list of short scenarios and will send them to you word for word.</p>
       <p>The chat is one-on-one. The assistant sees your messages, but not your name or any other details about you.</p>`,
     searching: "Starting a session with the AI assistant…",
     retry: "Connection timed out. Retrying…",
@@ -195,7 +197,8 @@ const DEBRIEF_HTML = `<div class="instr"><h2>About this study</h2>
   completely fine and won't affect your course credit.</p>
   <p><strong>Please don't share these details</strong> with anyone who might take this study, since that would
   affect their answers.</p>
-  <p>If you have questions, contact Victor Ferreira at 858-534-6303 or vferreira@ucsd.edu.</p></div>`;
+  <p>If you have questions, contact Victor Ferreira at 858-534-6303 or vferreira@ucsd.edu.</p>
+  <p><strong>Click one of the buttons below to finish the study and receive your credit.</strong></p></div>`;
 
 // Does the participant also ask the partner questions (F&H-style alternation)? false = the partner asks
 // every question and the participant answers all 48 (12 per I/you cell). true = turns alternate and the
@@ -206,8 +209,10 @@ const N_LISTS = PARTICIPANT_ASKS ? 8 : 4;
 // Partner typing, identical in both conditions (ms). perChar 180 ≈ 60 wpm.
 // Scenarios come from the partner's prepared list, so they aren't typed letter by letter, but they take a
 // believable while to arrive (a naive tester found a 1.5-3 s delay too fast for a human).
-const TIMING = { readDelay: [800, 1800], perChar: 180, jitter: 0.25, betweenMessages: [500, 1100],
-                 paste: { base: [3000, 5000], perChar: 50 } };   // ≈ 8–10 s for a typical scenario
+// Irregular on purpose: naive participants in the human condition read fixed, even delays as a bot.
+// A scenario now takes roughly 7-15 s to arrive, and about 1 in 8 has an extra pause of 5-12 s.
+const TIMING = { readDelay: [800, 3500], perChar: 180, jitter: 0.25, betweenMessages: [500, 1100],
+                 paste: { base: [3000, 8000], perChar: 55, jitter: 0.35, longChance: 0.12, long: [5000, 12000] } };
 // Answers of three words or fewer are rejected as not being a complete sentence.
 const MIN_WORDS = 4;
 
@@ -319,7 +324,8 @@ jsPsych.data.addProperties({
 
 const rand = (lo, hi) => lo + Math.random() * (hi - lo);
 const typingTime = (text, paste = false) => DEBUG ? 150 :
-  paste ? rand(...TIMING.paste.base) + text.length * TIMING.paste.perChar * (1 + rand(-TIMING.jitter, TIMING.jitter)) :
+  paste ? rand(...TIMING.paste.base) + text.length * TIMING.paste.perChar * (1 + rand(-TIMING.paste.jitter, TIMING.paste.jitter))
+          + (Math.random() < TIMING.paste.longChance ? rand(...TIMING.paste.long) : 0) :
   text.length * TIMING.perChar * (1 + rand(-TIMING.jitter, TIMING.jitter)) + 500;
 
 /* =====================================================================================
@@ -658,7 +664,7 @@ const instructions = {
      something. They'll send them to you one at a time and ask what the person watching would believe.
      Answer each one in a complete sentence.</p>
      ${PARTICIPANT_ASKS ? "<p>You'll take turns: on your turn, you'll send your partner a scenario to answer.</p>" : ""}
-     <p>The chat takes about 20 minutes.</p></div>`,
+     <p>The chat takes about 25–30 minutes.</p></div>`,
     `<div class="instr"><h2>An example</h2>
      <p>If your partner sends: <em>"You see I am typing everything in lowercase. What do you believe about me?"</em></p>
      <p>you might answer: <em>"I believe you're relaxed."</em></p>
@@ -695,7 +701,7 @@ const probeBelief = {
 // Rows from anyone with keep_data = false must be deleted before analysis.
 const debrief = {
   type: jsPsychHtmlButtonResponse, stimulus: DEBRIEF_HTML,
-  choices: ["Keep my responses", "Remove my responses"], data: { task: "debrief" },
+  choices: ["Keep my responses and finish", "Remove my responses and finish"], data: { task: "debrief" },
   on_finish: (d) => { d.keep_data = d.response === 0; jsPsych.data.addProperties({ keep_data: d.keep_data }); }
 };
 
